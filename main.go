@@ -16,7 +16,7 @@ import (
 	//"fmt"
 	"github.com/miekg/dns"
 	"github.com/asaskevich/govalidator"
-	//"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"net/http"
 	"flag"
@@ -34,6 +34,17 @@ type DNSRecord struct {
 	Value string
 }
 
+var (
+	RecordsGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "dns_records",
+			Help: "Statistics on dns records collected",
+		},
+		[]string{
+			"type",
+		},
+	)
+)
 var DNSRecords []DNSRecord
 var MXRecords []MXRecord
 
@@ -82,6 +93,9 @@ func getRecordsForDomain(domain string) ([]string, []string, []MXRecord) {
 				}
 				DNSRecords = append(DNSRecords, record)
 				ipv4_addresses = append(ipv4_addresses, ips[i].String())
+				RecordsGauge.With(prometheus.Labels{
+					"type": "A",
+				}).Inc()
 			}
 			if govalidator.IsIPv6(ips[i].String()) {
 				record := DNSRecord{
@@ -91,6 +105,9 @@ func getRecordsForDomain(domain string) ([]string, []string, []MXRecord) {
 				}
 				DNSRecords = append(DNSRecords, record)
 				ipv6_addresses = append(ipv6_addresses, ips[i].String())
+				RecordsGauge.With(prometheus.Labels{
+					"type": "AAAA",
+				}).Inc()
 			}
 		}
 	}
@@ -105,6 +122,9 @@ func getRecordsForDomain(domain string) ([]string, []string, []MXRecord) {
 			}
 			mx_addresses = append(mx_addresses, record)
 			MXRecords = append(MXRecords, record)
+			RecordsGauge.With(prometheus.Labels{
+					"type": "MX",
+			}).Inc()
 		}
 	}
 
@@ -150,6 +170,7 @@ func main() {
 	flag.Parse()
 	go func() {
 		// Start prometheus exporter
+		prometheus.MustRegister(RecordsGauge)
 		http.Handle("/metrics", promhttp.Handler())
 		log.Fatal(http.ListenAndServe(*exporter_addr, nil))
 	}()
