@@ -16,6 +16,10 @@ import (
 	//"fmt"
 	"github.com/miekg/dns"
 	"github.com/asaskevich/govalidator"
+	//"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"net/http"
+	"flag"
 )
 
 type MXRecord struct {
@@ -32,6 +36,10 @@ type DNSRecord struct {
 
 var DNSRecords []DNSRecord
 var MXRecords []MXRecord
+
+var (
+        exporter_addr = flag.String("exporter.addr", ":9100", "Address for the Prometheus Exporter to bind to")
+)
 
 func getRecordsForDomain(domain string) ([]string, []string, []MXRecord) {
 	var ipv4_addresses []string
@@ -138,14 +146,14 @@ func (this *handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 }
 
 func main() {
-	// This gives quick DNS stats
-	//go func() {
-	//	for {
-			//log.Println(DNSRecords)
-			//log.Println(MXRecords)
-			//time.Sleep(time.Duration(10 * time.Second))
-	//	}
-	//}()
+	log.Println("Starting Gocache...")
+	flag.Parse()
+	go func() {
+		// Start prometheus exporter
+		http.Handle("/metrics", promhttp.Handler())
+		log.Fatal(http.ListenAndServe(*exporter_addr, nil))
+	}()
+
 	srv := &dns.Server{Addr: ":" + strconv.Itoa(53), Net: "udp"}
 	srv.Handler = &handler{}
 	if err := srv.ListenAndServe(); err != nil {
