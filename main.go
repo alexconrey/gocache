@@ -18,6 +18,10 @@ import (
 	"github.com/derekparker/trie"
 	"net/http"
 	_ "net/http/pprof"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"net/http"
+	"flag"
 )
 
 var DEBUG bool = false
@@ -34,6 +38,22 @@ type DNSRecord struct {
 	Value string
 }
 
+var (
+	RecordsGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "dns_records",
+			Help: "Statistics on dns records collected",
+		},
+		[]string{
+			"type",
+		},
+	)
+)
+
+var (
+        exporter_addr = flag.String("exporter.addr", ":9100", "Address for the Prometheus Exporter to bind to")
+)
+
 var DNSRecords = trie.New()
 var MXRecords = trie.New()
 
@@ -43,7 +63,7 @@ func debugLog(msg string) {
 	}
 }
 
-func getRecordsForDomainTrie(domain string) ([]string, []string, []MXRecord) {
+func getRecordsForDomain(domain string) ([]string, []string, []MXRecord) {
 	var ipv4_addresses []string
 	var ipv6_addresses []string
 	var mx_addresses []MXRecord
@@ -92,6 +112,9 @@ func getRecordsForDomainTrie(domain string) ([]string, []string, []MXRecord) {
 				}
 				dns_records = append(dns_records, record)
 				ipv4_addresses = append(ipv4_addresses, ips[i].String())
+				RecordsGauge.With(prometheus.Labels{
+					"type": "A",
+				}).Inc()
 			}
 			if govalidator.IsIPv6(ips[i].String()) {
 				record := DNSRecord{
@@ -101,6 +124,9 @@ func getRecordsForDomainTrie(domain string) ([]string, []string, []MXRecord) {
 				}
 				dns_records = append(dns_records, record)
 				ipv6_addresses = append(ipv6_addresses, ips[i].String())
+				RecordsGauge.With(prometheus.Labels{
+					"type": "AAAA",
+				}).Inc()
 			}
 		}
 
@@ -128,6 +154,9 @@ func getRecordsForDomainTrie(domain string) ([]string, []string, []MXRecord) {
 		m, ok := MXRecords.Find(domain)
 		if ! ok {
 			MXRecords.Add(domain, mx_addresses)
+			RecordsGauge.With(prometheus.Labels{
+				"type": "MX",
+			}).Inc()
 			debugLog(fmt.Sprintf("Domain %s added to memory (trie)", domain))
 		} else {
 			fmt.Println(m)
@@ -145,7 +174,7 @@ func (this *handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	msg.SetReply(r)
 	domain := msg.Question[0].Name
 	msg.Authoritative = true
-	ipv4_addresses, ipv6_addresses, mx_addresses := getRecordsForDomainTrie(domain)
+	ipv4_addresses, ipv6_addresses, mx_addresses := getRecordsForDomain(domain)
 	switch r.Question[0].Qtype {
 	case dns.TypeA:
 		for i := 0; i < len(ipv4_addresses); i++ {
@@ -174,11 +203,21 @@ func (this *handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 }
 
 func main() {
+<<<<<<< HEAD
 	// pprof
 	go func() {
 		if DEBUG {
 			log.Println(http.ListenAndServe("localhost:6060", nil))
 		}
+=======
+	log.Println("Starting Gocache...")
+	flag.Parse()
+	go func() {
+		// Start prometheus exporter
+		prometheus.MustRegister(RecordsGauge)
+		http.Handle("/metrics", promhttp.Handler())
+		log.Fatal(http.ListenAndServe(*exporter_addr, nil))
+>>>>>>> 5bf8d4bc0c790bd293fa07ebc9cd89e8873dc6d5
 	}()
 
 	srv := &dns.Server{Addr: ":" + strconv.Itoa(53), Net: "udp"}
