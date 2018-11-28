@@ -45,6 +45,16 @@ var (
 			"type",
 		},
 	)
+	CacheHitCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "cache_hits",
+			Help: "Incremental counter for every time a cache hit is served",
+		})
+	CacheMissCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "cache_misses",
+			Help: "Incremental counter for every time a record is not served from cache",
+		})
 )
 
 var (
@@ -65,6 +75,10 @@ func getRecordsForDomain(domain string) ([]string, []string, []MXRecord) {
 	var ipv4_addresses []string
 	var ipv6_addresses []string
 	var mx_addresses []MXRecord
+
+	// this is set whenever a record is cached, this value is returned at the end
+	// of the function
+	is_cached := true 
 
 	// Perform memory lookup
 	DOMAIN_EXISTS := false
@@ -105,7 +119,9 @@ func getRecordsForDomain(domain string) ([]string, []string, []MXRecord) {
 		// Address unknown, perform lookup
 		debugLog("Domain unknown, performing lookup")
 		var dns_records = []DNSRecord{}
+		// If a lookup is performed, set cached bit to false
 		ips, _ := net.LookupIP(domain)
+		is_cached = false
 		for i := 0; i < len(ips); i++ {
 			if govalidator.IsIPv4(ips[i].String()) {
 				record := DNSRecord{
@@ -145,7 +161,9 @@ func getRecordsForDomain(domain string) ([]string, []string, []MXRecord) {
 	}
 
 	if ! MX_EXISTS {
+		// If a lookup is performed, set cached bit to false
 		mxs, _ := net.LookupMX(domain)
+		is_cached = false
 		for i := 0; i < len(mxs); i++ {
 			record := MXRecord{
 				Name: domain,
@@ -165,6 +183,12 @@ func getRecordsForDomain(domain string) ([]string, []string, []MXRecord) {
 			fmt.Println(m)
 			debugLog(fmt.Sprintf("Domain MX not created, but in !MX_EXISTS block - this seems bad:", domain))
 		}
+	}
+
+	if is_cached {
+		CacheHitCounter.Inc()
+	} else {
+		CacheMissCounter.Inc()
 	}
 
 	return ipv4_addresses, ipv6_addresses, mx_addresses
@@ -217,6 +241,9 @@ func main() {
 	go func() {
 		// Start prometheus exporter
 		prometheus.MustRegister(RecordsGauge)
+		prometheus.MustRegister(CacheHitCounter)
+		prometheus.MustRegister(CacheMissCounter)
+
 		http.Handle("/metrics", promhttp.Handler())
 		log.Fatal(http.ListenAndServe(*exporter_addr, nil))
 	}()
