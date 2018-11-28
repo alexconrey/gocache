@@ -12,11 +12,15 @@ import (
 	"net"
 	"strconv"
 	"log"
-	//"time"
-	//"fmt"
+	"fmt"
 	"github.com/miekg/dns"
 	"github.com/asaskevich/govalidator"
+	"github.com/derekparker/trie"
+	"net/http"
+	_ "net/http/pprof"
 )
+
+var DEBUG bool = false
 
 type MXRecord struct {
 	Name string
@@ -30,40 +34,54 @@ type DNSRecord struct {
 	Value string
 }
 
-var DNSRecords []DNSRecord
-var MXRecords []MXRecord
+var DNSRecords = trie.New()
+var MXRecords = trie.New()
 
-func getRecordsForDomain(domain string) ([]string, []string, []MXRecord) {
+func debugLog(msg string) {
+	if DEBUG {
+		log.Println(msg)
+	}
+}
+
+func getRecordsForDomainTrie(domain string) ([]string, []string, []MXRecord) {
 	var ipv4_addresses []string
 	var ipv6_addresses []string
 	var mx_addresses []MXRecord
 
 	// Perform memory lookup
 	DOMAIN_EXISTS := false
-	for i := 0; i < len(DNSRecords); i++ {
-		knownDomain := DNSRecords[i]
-		if domain == knownDomain.Name {
-			DOMAIN_EXISTS = true
-			if knownDomain.Type == "A" {
-				ipv4_addresses = append(ipv4_addresses, knownDomain.Value)
+	d, ok := DNSRecords.Find(domain)
+	if ! ok {
+		debugLog("Domain not in memory (trie)")
+	} else {
+		DOMAIN_EXISTS = true
+		addresses := d.Meta().([]DNSRecord)
+		for i := 0; i < len(addresses); i++ {
+			if addresses[i].Type == "A" {
+				ipv4_addresses = append(ipv4_addresses, addresses[i].Value)
 			}
-			if knownDomain.Type == "AAAA" {
-				ipv6_addresses = append(ipv6_addresses, knownDomain.Value)
+			if addresses[i].Type == "AAAA" {
+				ipv6_addresses = append(ipv6_addresses, addresses[i].Value)
 			}
 		}
 	}
 
 	MX_EXISTS := false
-	for i := 0; i < len(mx_addresses); i++ {
-		knownDomain := MXRecords[i]
-		if domain == knownDomain.Name {
-			MX_EXISTS = true
-			mx_addresses = append(mx_addresses, MXRecords[i])
+	m, ok := MXRecords.Find(domain)
+	if ! ok {
+		debugLog("MX not in memory (trie)")
+	} else {
+		MX_EXISTS = true
+		addresses := m.Meta().([]MXRecord)
+		for i := 0; i <len(addresses); i++ {
+			mx_addresses = append(mx_addresses, addresses[i])
 		}
 	}
 
 	if ! DOMAIN_EXISTS {
 		// Address unknown, perform lookup
+		debugLog("Domain unknown, performing lookup")
+		var dns_records = []DNSRecord{}
 		ips, _ := net.LookupIP(domain)
 		for i := 0; i < len(ips); i++ {
 			if govalidator.IsIPv4(ips[i].String()) {
@@ -72,7 +90,7 @@ func getRecordsForDomain(domain string) ([]string, []string, []MXRecord) {
 					Type: "A",
 					Value: ips[i].String(),
 				}
-				DNSRecords = append(DNSRecords, record)
+				dns_records = append(dns_records, record)
 				ipv4_addresses = append(ipv4_addresses, ips[i].String())
 			}
 			if govalidator.IsIPv6(ips[i].String()) {
@@ -81,9 +99,19 @@ func getRecordsForDomain(domain string) ([]string, []string, []MXRecord) {
 					Type: "AAAA",
 					Value: ips[i].String(),
 				}
-				DNSRecords = append(DNSRecords, record)
+				dns_records = append(dns_records, record)
 				ipv6_addresses = append(ipv6_addresses, ips[i].String())
 			}
+		}
+
+		// Create records with all returned addresses
+		d, ok := DNSRecords.Find(domain)
+		if ! ok {
+			DNSRecords.Add(domain, dns_records)
+			debugLog(fmt.Sprintf("Domain %s added to memory (trie)", domain))
+		} else {
+			fmt.Println(d)
+			debugLog(fmt.Sprintf("Domain not created, but in ! DOMAIN_EXISTS block - this seems bad:", domain))
 		}
 	}
 
@@ -96,7 +124,14 @@ func getRecordsForDomain(domain string) ([]string, []string, []MXRecord) {
 				Value: mxs[i].Host,
 			}
 			mx_addresses = append(mx_addresses, record)
-			MXRecords = append(MXRecords, record)
+		}
+		m, ok := MXRecords.Find(domain)
+		if ! ok {
+			MXRecords.Add(domain, mx_addresses)
+			debugLog(fmt.Sprintf("Domain %s added to memory (trie)", domain))
+		} else {
+			fmt.Println(m)
+			debugLog(fmt.Sprintf("Domain MX not created, but in !MX_EXISTS block - this seems bad:", domain))
 		}
 	}
 
@@ -105,11 +140,12 @@ func getRecordsForDomain(domain string) ([]string, []string, []MXRecord) {
 
 type handler struct{}
 func (this *handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
+	//log.Println(DNSRecords.Find("google.com"))
 	msg := dns.Msg{}
 	msg.SetReply(r)
 	domain := msg.Question[0].Name
 	msg.Authoritative = true
-	ipv4_addresses, ipv6_addresses, mx_addresses := getRecordsForDomain(domain)
+	ipv4_addresses, ipv6_addresses, mx_addresses := getRecordsForDomainTrie(domain)
 	switch r.Question[0].Qtype {
 	case dns.TypeA:
 		for i := 0; i < len(ipv4_addresses); i++ {
@@ -138,14 +174,13 @@ func (this *handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 }
 
 func main() {
-	// This gives quick DNS stats
-	//go func() {
-	//	for {
-			//log.Println(DNSRecords)
-			//log.Println(MXRecords)
-			//time.Sleep(time.Duration(10 * time.Second))
-	//	}
-	//}()
+	// pprof
+	go func() {
+		if DEBUG {
+			log.Println(http.ListenAndServe("localhost:6060", nil))
+		}
+	}()
+
 	srv := &dns.Server{Addr: ":" + strconv.Itoa(53), Net: "udp"}
 	srv.Handler = &handler{}
 	if err := srv.ListenAndServe(); err != nil {
