@@ -76,8 +76,8 @@ func getRecordsForDomain(domain string) ([]string, []string, []MXRecord) {
 	var ipv6_addresses []string
 	var mx_addresses []MXRecord
 
-	// this is set whenever a record is cached, this value is returned at the end
-	// of the function
+	// this is unset whenever a record lookup is performed
+	// used for setting the respective prometheus counter
 	is_cached := true 
 
 	// Perform memory lookup
