@@ -20,11 +20,8 @@ import (
 	_ "net/http/pprof"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"net/http"
 	"flag"
 )
-
-var DEBUG bool = false
 
 type MXRecord struct {
 	Name string
@@ -52,15 +49,16 @@ var (
 
 var (
         exporter_addr = flag.String("exporter.addr", ":9100", "Address for the Prometheus Exporter to bind to")
+        DEBUG = flag.Bool("debug", false, "Debug mode")
 )
 
 var DNSRecords = trie.New()
 var MXRecords = trie.New()
 
 func debugLog(msg string) {
-	if DEBUG {
-		log.Println(msg)
-	}
+	//if DEBUG {
+	log.Println(msg)
+	//}
 }
 
 func getRecordsForDomain(domain string) ([]string, []string, []MXRecord) {
@@ -95,6 +93,11 @@ func getRecordsForDomain(domain string) ([]string, []string, []MXRecord) {
 		addresses := m.Meta().([]MXRecord)
 		for i := 0; i <len(addresses); i++ {
 			mx_addresses = append(mx_addresses, addresses[i])
+			lookup_domain := addresses[i].Value
+			go func() {
+				// Perform automatic MX crawl/lookup in background
+				getRecordsForDomain(lookup_domain)
+			}()
 		}
 	}
 
@@ -203,21 +206,19 @@ func (this *handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 }
 
 func main() {
-<<<<<<< HEAD
-	// pprof
-	go func() {
-		if DEBUG {
-			log.Println(http.ListenAndServe("localhost:6060", nil))
-		}
-=======
 	log.Println("Starting Gocache...")
 	flag.Parse()
+
+	// pprof
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
+
 	go func() {
 		// Start prometheus exporter
 		prometheus.MustRegister(RecordsGauge)
 		http.Handle("/metrics", promhttp.Handler())
 		log.Fatal(http.ListenAndServe(*exporter_addr, nil))
->>>>>>> 5bf8d4bc0c790bd293fa07ebc9cd89e8873dc6d5
 	}()
 
 	srv := &dns.Server{Addr: ":" + strconv.Itoa(53), Net: "udp"}
